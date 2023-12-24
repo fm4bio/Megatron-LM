@@ -1,0 +1,1 @@
+`protein.py` and `residue_constants.py` are copied from openfold and modified.
