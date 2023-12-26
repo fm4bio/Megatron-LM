@@ -17,11 +17,11 @@
 import dataclasses
 import io
 from typing import Any, Sequence, Mapping, Optional
-import re
 import string
+import gzip
 
 from . import residue_constants
-from Bio.PDB import PDBParser # pip install biopython
+from Bio.PDB import PDBParser  # pip install biopython
 import numpy as np
 
 
@@ -31,7 +31,7 @@ PICO_TO_ANGSTROM = 0.01
 PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
-@dataclasses.dataclass(frozen=False)#(frozen=True)
+@dataclasses.dataclass(frozen=False)  # (frozen=True)
 class Protein:
     """Protein structure representation."""
 
@@ -79,33 +79,16 @@ class Protein:
     # modified: support-multi-model-20230619
     n_models: int = 1
 
-    # modified: add-to-fasta-20230619
-    def to_fasta(self):
-        return "".join([residue_constants.restypes_with_x[i] for i in self.aatype])
-
 
 def from_pdb_string(
     pdb_str: str,
-    chain_id = None,
+    chain_id=None,  # None = all chains, "A" = chain A, ["A", "B"] = chains A and B
     allow_multi_model=True,
-    allow_insertion="keep", # False: raise error, "keep": keep it, True and others: ignore
+    allow_insertion="keep",  # False: raise error, "keep": keep it, True and others: ignore
     skip_hetero=True,
     allow_lower_case_and_digit_chain_id=True,
     skip_x=True,
 ) -> Protein:
-    """Takes a PDB string and constructs a Protein object.
-
-    WARNING: All non-standard residue types will be converted into UNK. All
-      non-standard atoms will be ignored.
-
-    Args:
-      pdb_str: The contents of the pdb file
-      chain_id: If None, then the whole pdb file is parsed. If chain_id is specified (e.g. A), then only that chain
-        is parsed.
-
-    Returns:
-      A new `Protein` parsed from the pdb contents.
-    """
     pdb_fh = io.StringIO(pdb_str)
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure("none", pdb_fh)
@@ -121,9 +104,7 @@ def from_pdb_string(
     models = list(structure.get_models())
     if len(models) != 1:
         if allow_multi_model == False:  # modified: support-multi-model-20230619
-            raise ValueError(
-                f"Only single model PDBs are supported. Found {len(models)} models."
-            )
+            raise ValueError(f"Only single model PDBs are supported. Found {len(models)} models.")
         else:
             pass
     model = models[0]  # TODO: support loading other models
@@ -139,20 +120,15 @@ def from_pdb_string(
         if chain_id is not None:
             if hasattr(chain_id, '__contains__'):
                 if chain.id not in chain_id:
-                    # print(f'{chain.id} not in {chain_id}')
                     continue
             elif chain.id != chain_id:
                 continue
-        # print(chain_id, chain.id, 'yes')
 
         insertion_offset = 0  # offset due to amino acid insertion
         for res in chain:
             if res.id[2] != " ":
                 if allow_insertion == False:  # modified: support-insertion-20230619
-                    raise ValueError(
-                        f"PDB contains an insertion code at chain {chain.id} and residue "
-                        f"index {res.id[1]}. These are not supported."
-                    )
+                    raise ValueError(f"PDB contains an insertion code at chain {chain.id} and residue index {res.id[1]}. These are not supported.")
                 elif allow_insertion == "keep":
                     insertion_offset += 1
                 else:  # elif allow_insertion == "skip":
@@ -164,14 +140,16 @@ def from_pdb_string(
             if skip_x and res_shortname == "X":
                 continue
 
-            restype_idx = residue_constants.restype_order.get(
-                res_shortname, residue_constants.restype_num
-            )
+            restype_idx = residue_constants.restype_order.get(res_shortname, residue_constants.restype_num)
             pos = np.zeros((residue_constants.atom_type_num, 3))
             mask = np.zeros((residue_constants.atom_type_num,))
             res_b_factors = np.zeros((residue_constants.atom_type_num,))
             for atom in res:
                 if atom.name not in residue_constants.atom_types:
+                    if atom.name not in [
+                        "OP3",  # the OP3 occurs on the one end of the NA chain which is kept due to not being participated in dehydration condensation
+                    ]:
+                        print(f'UNK: [{atom.name}] in chain [{chain.id}] res [{res.resname}]')
                     continue
                 pos[residue_constants.atom_order[atom.name]] = atom.coord
                 mask[residue_constants.atom_order[atom.name]] = 1.0
@@ -182,9 +160,7 @@ def from_pdb_string(
             aatype.append(restype_idx)
             atom_positions.append(pos)
             atom_mask.append(mask)
-            residue_index.append(
-                res.id[1] + insertion_offset
-            )  # modified: support-insertion-20230619
+            residue_index.append(res.id[1] + insertion_offset)  # modified: support-insertion-20230619
             chain_ids.append(chain.id)
             b_factors.append(res_b_factors)
 
@@ -202,10 +178,7 @@ def from_pdb_string(
                     parents_chain_index.extend([chain_id for _ in parent_names])
                 chain_id += 1
 
-    unique_chain_ids = np.unique(chain_ids)
-    if (
-        not allow_lower_case_and_digit_chain_id
-    ):  # modified: support-lower-case-and-digit-chain-20230619
+    if not allow_lower_case_and_digit_chain_id:  # modified: support-lower-case-and-digit-chain-20230619
         chain_id_mapping = {cid: n for n, cid in enumerate(string.ascii_uppercase)}
     else:
         chain_id_mapping = {cid: n for n, cid in enumerate(PDB_CHAIN_IDS)}
@@ -226,63 +199,6 @@ def from_pdb_string(
     )
 
 
-def from_proteinnet_string(proteinnet_str: str) -> Protein:
-    tag_re = r"(\[[A-Z]+\]\n)"
-    tags = [tag.strip() for tag in re.split(tag_re, proteinnet_str) if len(tag) > 0]
-    groups = zip(tags[0::2], [l.split("\n") for l in tags[1::2]])
-
-    atoms = ["N", "CA", "C"]
-    aatype = None
-    atom_positions = None
-    atom_mask = None
-    for g in groups:
-        if "[PRIMARY]" == g[0]:
-            seq = g[1][0].strip()
-            for i in range(len(seq)):
-                if seq[i] not in residue_constants.restypes:
-                    seq[i] = "X"
-            aatype = np.array(
-                [
-                    residue_constants.restype_order.get(
-                        res_symbol, residue_constants.restype_num
-                    )
-                    for res_symbol in seq
-                ]
-            )
-        elif "[TERTIARY]" == g[0]:
-            tertiary = []
-            for axis in range(3):
-                tertiary.append(list(map(float, g[1][axis].split())))
-            tertiary_np = np.array(tertiary)
-            atom_positions = np.zeros(
-                (len(tertiary[0]) // 3, residue_constants.atom_type_num, 3)
-            ).astype(np.float32)
-            for i, atom in enumerate(atoms):
-                atom_positions[:, residue_constants.atom_order[atom], :] = np.transpose(
-                    tertiary_np[:, i::3]
-                )
-            atom_positions *= PICO_TO_ANGSTROM
-        elif "[MASK]" == g[0]:
-            mask = np.array(list(map({"-": 0, "+": 1}.get, g[1][0].strip())))
-            atom_mask = np.zeros(
-                (
-                    len(mask),
-                    residue_constants.atom_type_num,
-                )
-            ).astype(np.float32)
-            for i, atom in enumerate(atoms):
-                atom_mask[:, residue_constants.atom_order[atom]] = 1
-            atom_mask *= mask[..., None]
-
-    return Protein(
-        atom_positions=atom_positions,
-        atom_mask=atom_mask,
-        aatype=aatype,
-        residue_index=np.arange(len(aatype)),
-        b_factors=None,
-    )
-
-
 def get_pdb_headers(prot: Protein, chain_id: int = 0) -> Sequence[str]:
     pdb_headers = []
 
@@ -294,11 +210,6 @@ def get_pdb_headers(prot: Protein, chain_id: int = 0) -> Sequence[str]:
     parents_chain_index = prot.parents_chain_index
     if parents_chain_index is not None:
         parents = [p for i, p in zip(parents_chain_index, parents) if i == chain_id]
-
-    # if parents is None or len(parents) == 0:
-    #     parents = ["N/A"]
-
-    # pdb_headers.append(f"PARENT {' '.join(parents)}")
 
     # TODO: what is parents here?
     if parents is None or len(parents) == 0:
@@ -324,7 +235,6 @@ def add_pdb_headers(prot: Protein, pdb_str: str) -> str:
     if prot.parents is not None and len(prot.parents) > 0:
         parents_per_chain = []
         if prot.parents_chain_index is not None:
-            cur_chain = prot.parents_chain_index[0]
             parent_dict = {}
             for p, i in zip(prot.parents, prot.parents_chain_index):
                 parent_dict.setdefault(str(i), [])
@@ -391,14 +301,12 @@ def to_pdb(prot: Protein) -> str:
 
     n = aatype.shape[0]
     atom_index = 1
-    prev_chain_index = chain_index[0] # fix!
+    prev_chain_index = chain_index[0]
     chain_tags = PDB_CHAIN_IDS
     # Add all atom sites.
     for i in range(n):
         res_name_3 = res_1to3(aatype[i])
-        for atom_name, pos, mask, b_factor in zip(
-            atom_types, atom_positions[i], atom_mask[i], b_factors[i]
-        ):
+        for atom_name, pos, mask, b_factor in zip(atom_types, atom_positions[i], atom_mask[i], b_factors[i]):
             if mask < 0.5:
                 continue
 
@@ -435,11 +343,7 @@ def to_pdb(prot: Protein) -> str:
         if should_terminate:
             # Close the chain.
             chain_end = "TER"
-            chain_termination_line = (
-                f"{chain_end:<6}{atom_index:>5}      "
-                f"{res_1to3(aatype[i]):>3} "
-                f"{chain_tag:>1}{residue_index[i]:>4}"
-            )
+            chain_termination_line = f"{chain_end:<6}{atom_index:>5}      {res_1to3(aatype[i]):>3} {chain_tag:>1}{residue_index[i]:>4}"
             pdb_lines.append(chain_termination_line)
             atom_index += 1
 
@@ -471,48 +375,13 @@ def ideal_atom_mask(prot: Protein) -> np.ndarray:
     return residue_constants.STANDARD_ATOM_MASK[prot.aatype]
 
 
-def from_prediction(
-    features: FeatureDict,
-    result: ModelOutput,
-    b_factors: Optional[np.ndarray] = None,
-    chain_index: Optional[np.ndarray] = None,
-    remark: Optional[str] = None,
-    parents: Optional[Sequence[str]] = None,
-    parents_chain_index: Optional[Sequence[int]] = None,
-) -> Protein:
-    """Assembles a protein from a prediction.
-
-    Args:
-      features: Dictionary holding model inputs.
-      result: Dictionary holding model outputs.
-      b_factors: (Optional) B-factors to use for the protein.
-      chain_index: (Optional) Chain indices for multi-chain predictions
-      remark: (Optional) Remark about the prediction
-      parents: (Optional) List of template names
-    Returns:
-      A protein instance.
-    """
-    if b_factors is None:
-        b_factors = np.zeros_like(result["final_atom_mask"])
-
-    return Protein(
-        aatype=features["aatype"],
-        atom_positions=result["final_atom_positions"],
-        atom_mask=result["final_atom_mask"],
-        residue_index=features["residue_index"] + 1,
-        b_factors=b_factors,
-        chain_index=chain_index,
-        remark=remark,
-        parents=parents,
-        parents_chain_index=parents_chain_index,
-    )
-
-
 def get_chain_ids(po):
     return np.unique(po.chain_index)
 
+
 def chain_id_to_char(chain_id):
     return PDB_CHAIN_IDS[chain_id]
+
 
 def get_chain_by_id(po, chain_id):
     mask = po.chain_index == chain_id
@@ -528,5 +397,30 @@ def get_chain_by_id(po, chain_id):
         parents_chain_index=po.parents_chain_index,
     )
 
-def to_sequence(po):
-    return residue_constants.aatype_to_str_sequence(po.aatype)
+
+def to_sequence(po, special_na_token=True):
+    return residue_constants.aatype_to_str_sequence(po.aatype, special_na_token)
+
+
+def from_pdb_file(fname, *args, **kwargs):
+    with open(fname) as f:
+        return from_pdb_string(f.read(), *args, **kwargs)
+
+
+def from_pdb_gz(fname, *args, **kwargs):
+    with gzip.open(fname, 'rb') as f:
+        return from_pdb_string(gzip.open(fname).read().decode('utf-8'), *args, **kwargs)
+
+
+def to_pdb_file(po, fname):
+    with open(fname, 'w') as f:
+        f.write(to_pdb(po))
+
+
+if __name__ == '__main__':
+    # test with 1 data
+    po = from_pdb_file('biotools/notes/1b7f.pdb')
+    to_pdb_file(po, 'biotools/notes/1b7f_recon.pdb')
+    # po = from_pdb_file('biotools/notes/1njy.pdb')
+    # to_pdb_file(po, 'biotools/notes/1njy_recon.pdb')
+    print(to_sequence(po, special_na_token=False))
