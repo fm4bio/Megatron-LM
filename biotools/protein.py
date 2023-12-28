@@ -146,10 +146,8 @@ def from_pdb_string(
             res_b_factors = np.zeros((residue_constants.atom_type_num,))
             for atom in res:
                 if atom.name not in residue_constants.atom_types:
-                    if atom.name not in [
-                        "OP3",  # the OP3 occurs on the one end of the NA chain which is kept due to not being participated in dehydration condensation
-                    ]:
-                        print(f'UNK: [{atom.name}] in chain [{chain.id}] res [{res.resname}]')
+                    if atom.name not in ["OP3"] and atom.name[0] not in ["H", "D"]:
+                        print(f'Unknown atom: [{atom.name}] in chain [{chain.id}] res [{res.resname}]')
                     continue
                 pos[residue_constants.atom_order[atom.name]] = atom.coord
                 mask[residue_constants.atom_order[atom.name]] = 1.0
@@ -398,8 +396,16 @@ def get_chain_by_id(po, chain_id):
     )
 
 
-def to_sequence(po, special_na_token=True):
-    return residue_constants.aatype_to_str_sequence(po.aatype, special_na_token)
+def to_sequence(po, special_na_token=True, only_protein=False, only_rna=False, only_dna=False):
+    aatype = po.aatype
+    assert sum([only_protein, only_rna, only_dna]) <= 1, "only one of only_protein, only_rna, only_dna can be True"
+    if only_protein:
+        aatype = aatype[aatype <= 20]  # 0 ~ 20 is protein
+    elif only_rna:
+        aatype = aatype[(21 <= aatype) & (aatype <= 25)]  # 21 ~ 25 is RNA
+    elif only_dna:
+        aatype = aatype[(26 <= aatype) & (aatype <= 30)]  # 26 ~ 30 is DNA
+    return residue_constants.aatype_to_str_sequence(aatype, special_na_token)
 
 
 def from_pdb_file(fname, *args, **kwargs):
@@ -419,8 +425,14 @@ def to_pdb_file(po, fname):
 
 if __name__ == '__main__':
     # test with 1 data
-    po = from_pdb_file('biotools/notes/1b7f.pdb')
-    to_pdb_file(po, 'biotools/notes/1b7f_recon.pdb')
+    # po = from_pdb_file('biotools/notes/1b7f.pdb')
+    # to_pdb_file(po, 'biotools/notes/1b7f_recon.pdb')
     # po = from_pdb_file('biotools/notes/1njy.pdb')
     # to_pdb_file(po, 'biotools/notes/1njy_recon.pdb')
-    print(to_sequence(po, special_na_token=False))
+    # po = from_pdb_file('biotools/notes/1vq8.pdb')
+    # to_pdb_file(po, 'biotools/notes/1vq8_recon.pdb')
+    po = from_pdb_file('biotools/notes/8gwo.pdb')
+    to_pdb_file(po, 'biotools/notes/8gwo_recon.pdb')
+    print([chain_id_to_char(i) for i in get_chain_ids(po)])
+    print(to_sequence(po, special_na_token=True, only_protein=True))
+    print(to_sequence(po, special_na_token=True, only_protein=False))
