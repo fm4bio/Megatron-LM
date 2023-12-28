@@ -423,16 +423,21 @@ def to_pdb_file(po, fname):
         f.write(to_pdb(po))
 
 
-if __name__ == '__main__':
-    # test with 1 data
-    # po = from_pdb_file('biotools/notes/1b7f.pdb')
-    # to_pdb_file(po, 'biotools/notes/1b7f_recon.pdb')
-    # po = from_pdb_file('biotools/notes/1njy.pdb')
-    # to_pdb_file(po, 'biotools/notes/1njy_recon.pdb')
-    # po = from_pdb_file('biotools/notes/1vq8.pdb')
-    # to_pdb_file(po, 'biotools/notes/1vq8_recon.pdb')
+if __name__ == '__main__': # python -m biotools.protein
+    # read and write
     po = from_pdb_file('biotools/notes/8gwo.pdb')
     to_pdb_file(po, 'biotools/notes/8gwo_recon.pdb')
-    print([chain_id_to_char(i) for i in get_chain_ids(po)])
-    print(to_sequence(po, special_na_token=True, only_protein=True))
-    print(to_sequence(po, special_na_token=True, only_protein=False))
+    # check two files using visualization tools
+
+    # 3D pos
+    print(po.atom_positions.shape) # (length, atom types, 3)
+    print(po.atom_mask.shape) # (length, atom types)
+
+    # show the sequences of each chain
+    for i in get_chain_ids(po):
+        po_chain = get_chain_by_id(po, i)
+        print("chain", chain_id_to_char(i))
+        print("\tprotein:", to_sequence(po_chain, special_na_token=False, only_protein=True))
+        print("\trna:", to_sequence(po_chain, special_na_token=False, only_rna=True))
+        print("\tdna:", to_sequence(po_chain, special_na_token=False, only_dna=True))
+        print("\tall:", to_sequence(po_chain, special_na_token=True)) # ATCG and AUCG to special symbols
